@@ -6,7 +6,6 @@
 <meta name="theme-color" content="#0c1120">
 <title>Nightlight — browser babyphone</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
-<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&display=swap" rel="stylesheet">
 <style>
@@ -109,7 +108,7 @@
   <div id="qr-wrap"></div>
   <p class="hint">Open the camera app on the listening phone and point it here. Then keep <b>this</b> phone near the baby, plugged in, screen on.</p>
   <div class="status" id="baby-status"><span class="pip"></span><span>Getting ready…</span></div>
-  <div class="diag hidden" id="baby-diag"></div>
+  <div class="diag" id="baby-diag">starting…</div>
 </main>
 
 <main id="view-parent" class="hidden">
@@ -122,239 +121,211 @@
   <div class="diag hidden" id="parent-diag"></div>
 </main>
 
-<footer>Peer-to-peer via WebRTC · signaling by PeerJS cloud · no account, no recording</footer>
+<footer>Peer-to-peer via WebRTC · serverless signaling (Trystero/Nostr) · no account, no recording</footer>
 
 <audio id="remote-audio" autoplay playsinline></audio>
 
-<script>
-(() => {
-  const $ = s => document.querySelector(s);
-  const views = { start: $('#view-start'), baby: $('#view-baby'), parent: $('#view-parent') };
-  const remoteAudio = $('#remote-audio');
+<script type="module">
+import {joinRoom, getRelaySockets, selfId} from 'https://cdn.jsdelivr.net/npm/trystero@0.25.2/+esm';
 
-  function show(name){
-    Object.values(views).forEach(v => v.classList.add('hidden'));
-    views[name].classList.remove('hidden');
-    $('#role-tag').textContent = {start:'start', baby:'baby station', parent:'listening'}[name];
+const APP_ID = 'nightlight-babyphone-v1';
+const $ = s => document.querySelector(s);
+const views = { start: $('#view-start'), baby: $('#view-baby'), parent: $('#view-parent') };
+const remoteAudio = $('#remote-audio');
+
+function show(name){
+  Object.values(views).forEach(v => v.classList.add('hidden'));
+  views[name].classList.remove('hidden');
+  $('#role-tag').textContent = {start:'start', baby:'baby station', parent:'listening'}[name];
+}
+function setStatus(el, cls, text){
+  el.classList.remove('hidden','ok','warn');
+  if(cls) el.classList.add(cls);
+  el.querySelector('span:last-child').textContent = text;
+}
+
+if (location.protocol !== 'https:' && !['localhost','127.0.0.1'].includes(location.hostname)) {
+  $('#https-warning').classList.remove('hidden');
+}
+
+// ---- keep the screen awake -------------------------------------------
+let wakeLock = null;
+async function keepAwake(){
+  try { wakeLock = await navigator.wakeLock?.request('screen'); } catch(e){}
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && wakeLock !== null) keepAwake();
+});
+
+// ---- sound level -> CSS ring ------------------------------------------
+let audioCtx;
+function ctx(){ return audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)(); }
+function meter(stream){
+  try{
+    const src = ctx().createMediaStreamSource(stream);
+    const an = ctx().createAnalyser();
+    an.fftSize = 512;
+    src.connect(an);
+    const buf = new Uint8Array(an.frequencyBinCount);
+    (function loop(){
+      an.getByteTimeDomainData(buf);
+      let sum = 0;
+      for (let i=0;i<buf.length;i++){ const d = (buf[i]-128)/128; sum += d*d; }
+      document.documentElement.style.setProperty('--ring',
+        Math.min(1, Math.sqrt(sum/buf.length)*6).toFixed(3));
+      requestAnimationFrame(loop);
+    })();
+  }catch(e){}
+}
+
+const randomId = () => 'nl' + Math.random().toString(36).slice(2,8) + Math.random().toString(36).slice(2,6);
+
+function relaySummary(){
+  try{
+    const socks = getRelaySockets();
+    const urls = Object.keys(socks);
+    const open = urls.filter(u => socks[u] && socks[u].readyState === 1).length;
+    return 'signal relays: ' + open + '/' + urls.length + ' connected';
+  }catch(e){ return 'signal relays: ?'; }
+}
+
+// ---- shared diagnostics loop -------------------------------------------
+function watchRoom(room, el, dir /* 'in' | 'out' */){
+  el.classList.remove('hidden');
+  let lastBytes = 0;
+  setInterval(async () => {
+    let line1 = relaySummary();
+    const peers = room ? room.getPeers() : {};
+    const ids = Object.keys(peers);
+    if (!ids.length){ el.textContent = line1 + '\npeer: none yet'; return; }
+    const pc = peers[ids[0]];
+    let bytes = 0, level = null, pair = '';
+    try{
+      const stats = await pc.getStats();
+      stats.forEach(r => {
+        const kind = r.kind || r.mediaType;
+        if (dir === 'in'  && r.type === 'inbound-rtp'  && kind === 'audio'){
+          bytes = r.bytesReceived || 0;
+          if (typeof r.audioLevel === 'number') level = r.audioLevel;
+        }
+        if (dir === 'out' && r.type === 'outbound-rtp' && kind === 'audio'){
+          bytes = r.bytesSent || 0;
+        }
+        if (r.type === 'candidate-pair' && (r.selected || r.nominated) && r.state === 'succeeded'){
+          const l = stats.get(r.localCandidateId), rm = stats.get(r.remoteCandidateId);
+          if (l && rm) pair = l.candidateType + '→' + rm.candidateType;
+        }
+      });
+    }catch(e){}
+    const rate = Math.max(0, bytes - lastBytes); lastBytes = bytes;
+    el.textContent =
+      line1 +
+      '\npeer link: ' + (pc.connectionState || '?') + ' · ice: ' + pc.iceConnectionState +
+      (pair ? ' · path: ' + pair : '') +
+      '\naudio ' + dir + ': ' + (rate > 0 ? Math.round(rate*8/1000) + ' kbit/s' : 'NONE') +
+      (level !== null ? ' · level: ' + level.toFixed(3) : '') +
+      (dir === 'in'
+        ? '\nplayer: ' + (remoteAudio.paused ? 'PAUSED' : 'playing') +
+          (remoteAudio.muted ? ' (MUTED)' : '') + ' · vol ' + remoteAudio.volume
+        : '');
+  }, 1000);
+}
+
+// =======================================================================
+// BABY STATION
+// =======================================================================
+async function startBaby(){
+  let stream;
+  try{
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: true },
+      video: false
+    });
+  }catch(e){
+    alert('Microphone access is required for the baby station. (' + e.name + ')');
+    return;
   }
-  function setStatus(el, cls, text){
-    el.classList.remove('hidden','ok','warn');
-    if(cls) el.classList.add(cls);
-    el.querySelector('span:last-child').textContent = text;
+  show('baby');
+  keepAwake();
+  meter(stream);
+
+  const roomId = randomId();
+  const room = joinRoom({ appId: APP_ID }, roomId);
+  const statusEl = $('#baby-status');
+  let listeners = 0;
+
+  const url = location.origin + location.pathname + '?listen=' + roomId;
+  new QRCode($('#qr-wrap'), { text: url, width: 220, height: 220, correctLevel: QRCode.CorrectLevel.M });
+  setStatus(statusEl, null, 'Waiting for a listener…');
+
+  room.addStream(stream);
+  room.onPeerJoin = peerId => {
+    room.addStream(stream, { target: peerId });
+    listeners++; update();
+  };
+  room.onPeerLeave = () => { listeners = Math.max(0, listeners-1); update(); };
+  function update(){
+    if (listeners > 0) setStatus(statusEl, 'ok', listeners === 1 ? 'A listener is connected' : listeners + ' listeners connected');
+    else setStatus(statusEl, null, 'Listener left — waiting…');
   }
 
-  if (location.protocol !== 'https:' && !['localhost','127.0.0.1'].includes(location.hostname)) {
-    $('#https-warning').classList.remove('hidden');
-  }
+  watchRoom(room, $('#baby-diag'), 'out');
+}
 
-  // ---- keep the screen awake -------------------------------------------
-  let wakeLock = null;
-  async function keepAwake(){
-    try { wakeLock = await navigator.wakeLock?.request('screen'); } catch(e){}
-  }
-  document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible' && wakeLock !== null) keepAwake();
+// =======================================================================
+// LISTENING STATION
+// =======================================================================
+async function startParent(roomId){
+  const statusEl = $('#parent-status');
+  $('#btn-listen').disabled = true;
+  setStatus(statusEl, null, 'Connecting…');
+  keepAwake();
+
+  // Unlock audio output while still inside the tap gesture.
+  try{ await ctx().resume(); }catch(e){}
+  try{
+    remoteAudio.muted = false;
+    remoteAudio.volume = 1;
+    remoteAudio.srcObject = ctx().createMediaStreamDestination().stream;
+    await remoteAudio.play();
+  }catch(e){}
+
+  const room = joinRoom({ appId: APP_ID }, roomId);
+  let gotStream = false;
+
+  room.onPeerJoin = () => setStatus(statusEl, null, 'Found baby station — waiting for audio…');
+  room.onPeerStream = babyStream => {
+    gotStream = true;
+    remoteAudio.srcObject = babyStream;
+    remoteAudio.play().catch(() => $('#btn-unmute').classList.remove('hidden'));
+    meter(babyStream);
+    setStatus(statusEl, 'ok', 'Receiving audio');
+    $('#btn-listen').classList.add('hidden');
+    $('#parent-hint').classList.remove('hidden');
+    $('#parent-title').textContent = 'Listening…';
+  };
+  room.onPeerLeave = () => setStatus(statusEl, 'warn', 'Baby station disconnected');
+
+  setTimeout(() => { if(!gotStream) setStatus(statusEl,'warn','No audio after 20s — check the diagnostics below'); }, 20000);
+
+  watchRoom(room, $('#parent-diag'), 'in');
+
+  $('#btn-unmute').addEventListener('click', () => {
+    remoteAudio.muted = false;
+    ctx().resume();
+    remoteAudio.play().then(() => $('#btn-unmute').classList.add('hidden')).catch(()=>{});
   });
+}
 
-  // ---- sound level -> CSS ring ------------------------------------------
-  let audioCtx;
-  function ctx(){ return audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)(); }
-  function meter(stream){
-    try{
-      const src = ctx().createMediaStreamSource(stream);
-      const an = ctx().createAnalyser();
-      an.fftSize = 512;
-      src.connect(an);
-      const buf = new Uint8Array(an.frequencyBinCount);
-      (function loop(){
-        an.getByteTimeDomainData(buf);
-        let sum = 0;
-        for (let i=0;i<buf.length;i++){ const d = (buf[i]-128)/128; sum += d*d; }
-        document.documentElement.style.setProperty('--ring',
-          Math.min(1, Math.sqrt(sum/buf.length)*6).toFixed(3));
-        requestAnimationFrame(loop);
-      })();
-    }catch(e){}
-  }
-
-  function newPeer(id){
-    return new Peer(id, {
-      debug: 2,
-      config: { iceServers: [
-        { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }
-      ]}
-    });
-  }
-  const randomId = () => 'nl-' + Math.random().toString(36).slice(2,8) + Math.random().toString(36).slice(2,6);
-
-  // ---- shared: RTCPeerConnection diagnostics ----------------------------
-  function watchPC(getPC, el, dir /* 'in' | 'out' */){
-    el.classList.remove('hidden');
-    let lastBytes = 0;
-    setInterval(async () => {
-      const pc = getPC();
-      if (!pc){ el.textContent = 'link: waiting for call…'; return; }
-      let bytes = 0, level = null, pair = '';
-      try{
-        const stats = await pc.getStats();
-        stats.forEach(r => {
-          const kind = r.kind || r.mediaType;
-          if (dir === 'in'  && r.type === 'inbound-rtp'  && kind === 'audio'){
-            bytes = r.bytesReceived || 0;
-            if (typeof r.audioLevel === 'number') level = r.audioLevel;
-          }
-          if (dir === 'out' && r.type === 'outbound-rtp' && kind === 'audio'){
-            bytes = r.bytesSent || 0;
-          }
-          if (r.type === 'candidate-pair' && (r.selected || r.nominated) && r.state === 'succeeded'){
-            let l = stats.get(r.localCandidateId), rm = stats.get(r.remoteCandidateId);
-            if (l && rm) pair = l.candidateType + '→' + rm.candidateType;
-          }
-        });
-      }catch(e){}
-      const rate = Math.max(0, bytes - lastBytes); lastBytes = bytes;
-      el.textContent =
-        'link: ' + (pc.connectionState || '?') + ' · ice: ' + pc.iceConnectionState +
-        ' · gather: ' + pc.iceGatheringState +
-        '\nsignaling: ' + pc.signalingState + (pair ? ' · path: ' + pair : '') +
-        '\naudio ' + dir + ': ' + (rate > 0 ? Math.round(rate*8/1000) + ' kbit/s' : 'NONE') +
-        (level !== null ? ' · level: ' + level.toFixed(3) : '') +
-        (dir === 'in'
-          ? '\nplayer: ' + (remoteAudio.paused ? 'PAUSED' : 'playing') +
-            (remoteAudio.muted ? ' (MUTED)' : '') + ' · vol ' + remoteAudio.volume
-          : '');
-    }, 1000);
-  }
-
-  // =======================================================================
-  // BABY STATION — waits for a data connection, then CALLS the listener
-  // with its microphone stream. (Baby initiates media = no fake streams.)
-  // =======================================================================
-  async function startBaby(){
-    let stream;
-    try{
-      stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: true },
-        video: false
-      });
-    }catch(e){
-      alert('Microphone access is required for the baby station. (' + e.name + ')');
-      return;
-    }
-    show('baby');
-    keepAwake();
-    meter(stream);
-
-    const id = randomId();
-    const peer = newPeer(id);
-    const statusEl = $('#baby-status');
-    let currentCall = null;
-    let listeners = 0;
-
-    watchPC(() => currentCall && currentCall.peerConnection, $('#baby-diag'), 'out');
-
-    peer.on('open', () => {
-      const url = location.origin + location.pathname + '?listen=' + id;
-      new QRCode($('#qr-wrap'), { text: url, width: 220, height: 220, correctLevel: QRCode.CorrectLevel.M });
-      setStatus(statusEl, null, 'Waiting for a listener…');
-    });
-
-    // Listener announces itself over a data connection; we call back with audio.
-    peer.on('connection', conn => {
-      conn.on('open', () => {
-        const call = peer.call(conn.peer, stream);
-        currentCall = call;
-        listeners++; update();
-        const done = () => { listeners = Math.max(0, listeners-1); update(); };
-        conn.on('close', done);
-        call.on('close', done);
-        call.on('error', done);
-      });
-      function update(){
-        if (listeners > 0) setStatus(statusEl, 'ok', listeners === 1 ? 'A listener is connected' : listeners + ' listeners connected');
-        else setStatus(statusEl, null, 'Listener left — waiting…');
-      }
-    });
-
-    peer.on('disconnected', () => { setStatus(statusEl,'warn','Signal lost — reconnecting…'); peer.reconnect(); });
-    peer.on('error', err => setStatus(statusEl,'warn','Error: ' + err.type));
-  }
-
-  // =======================================================================
-  // LISTENING STATION — receive-only
-  // =======================================================================
-  async function startParent(babyId){
-    const statusEl = $('#parent-status');
-    $('#btn-listen').disabled = true;
-    setStatus(statusEl, null, 'Connecting…');
-    keepAwake();
-
-    // Unlock audio output while still inside the tap gesture:
-    // start the element on a silent local stream; swap in the real one later.
-    try{ await ctx().resume(); }catch(e){}
-    try{
-      remoteAudio.muted = false;
-      remoteAudio.volume = 1;
-      remoteAudio.srcObject = ctx().createMediaStreamDestination().stream;
-      await remoteAudio.play();
-    }catch(e){}
-
-    let currentCall = null;
-    watchPC(() => currentCall && currentCall.peerConnection, $('#parent-diag'), 'in');
-
-    const peer = newPeer();
-    let gotStream = false;
-
-    peer.on('open', () => {
-      // Announce ourselves; the baby station will call us with its audio.
-      const conn = peer.connect(babyId, { reliable: true });
-      conn.on('open', () => setStatus(statusEl, null, 'Found baby station — waiting for audio…'));
-      conn.on('error', () => setStatus(statusEl, 'warn', 'Could not reach baby station — rescan the QR code'));
-      setTimeout(() => { if(!gotStream) setStatus(statusEl,'warn','No audio after 15s — check the diagnostics below'); }, 15000);
-    });
-
-    peer.on('call', call => {
-      currentCall = call;
-      call.answer();               // receive-only: we send nothing
-      call.on('stream', babyStream => {
-        gotStream = true;
-        remoteAudio.srcObject = babyStream;
-        remoteAudio.play().catch(() => $('#btn-unmute').classList.remove('hidden'));
-        meter(babyStream);
-        setStatus(statusEl, 'ok', 'Receiving audio');
-        $('#btn-listen').classList.add('hidden');
-        $('#parent-hint').classList.remove('hidden');
-        $('#parent-title').textContent = 'Listening…';
-      });
-      call.on('close', () => setStatus(statusEl, 'warn', 'Connection closed — reload to reconnect'));
-      call.on('error', () => setStatus(statusEl, 'warn', 'Connection error — reload to retry'));
-    });
-
-    peer.on('disconnected', () => peer.reconnect());
-    peer.on('error', err => {
-      setStatus(statusEl, 'warn', err.type === 'peer-unavailable'
-        ? 'Baby station not found — rescan the QR code'
-        : 'Error: ' + err.type);
-      $('#btn-listen').disabled = false;
-    });
-
-    $('#btn-unmute').addEventListener('click', () => {
-      remoteAudio.muted = false;
-      ctx().resume();
-      remoteAudio.play().then(() => $('#btn-unmute').classList.add('hidden')).catch(()=>{});
-    });
-  }
-
-  // ---- routing -----------------------------------------------------------
-  const babyId = new URLSearchParams(location.search).get('listen');
-  if (babyId){
-    show('parent');
-    $('#btn-listen').addEventListener('click', () => startParent(babyId));
-  } else {
-    show('start');
-    $('#btn-baby').addEventListener('click', startBaby);
-  }
-})();
+// ---- routing -----------------------------------------------------------
+const roomId = new URLSearchParams(location.search).get('listen');
+if (roomId){
+  show('parent');
+  $('#btn-listen').addEventListener('click', () => startParent(roomId));
+} else {
+  show('start');
+  $('#btn-baby').addEventListener('click', startBaby);
+}
 </script>
 </body>
 </html>
