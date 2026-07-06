@@ -97,6 +97,8 @@
 
   .banner{width:100%;max-width:420px;background:#2a1c1c;border:1px solid #5b3030;color:#f0c9c4;
     border-radius:12px;padding:12px 14px;font-size:14px;text-align:left}
+  #diag{font:11px/1.7 ui-monospace,Menlo,Consolas,monospace;color:#7d879c;background:var(--night-2);
+    border:1px solid #223055;border-radius:10px;padding:8px 12px;width:100%;text-align:left;white-space:pre-wrap}
   footer{width:100%;max-width:420px;margin-top:18px;font-size:12px;color:#5c6478;text-align:center}
   a{color:var(--dim)}
 </style>
@@ -135,6 +137,7 @@
   <div class="status hidden" id="parent-status"><span class="pip"></span><span>Connecting…</span></div>
   <button id="btn-unmute" class="hidden">🔇 Tap to enable sound</button>
   <p class="hint hidden" id="parent-hint">Keep the screen on. The ring glows with every sound from the baby's room.</p>
+  <div id="diag" class="hidden"></div>
 </main>
 
 <footer>Peer-to-peer via WebRTC · signaling by PeerJS cloud · no account, no recording</footer>
@@ -196,7 +199,16 @@
   }
 
   function newPeer(id){
-    return new Peer(id, { debug: 1 }); // PeerJS public cloud for signaling + STUN
+    return new Peer(id, {
+      debug: 1, // PeerJS public cloud for signaling
+      config: { iceServers: [
+        { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] },
+        // Free public TURN relay (Open Relay Project) — fallback when direct P2P is blocked
+        { urls: 'turn:openrelay.metered.ca:80',  username: 'openrelayproject', credential: 'openrelayproject' },
+        { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
+        { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' }
+      ]}
+    });
   }
   const randomId = () => 'nl-' + Math.random().toString(36).slice(2,8) + Math.random().toString(36).slice(2,6);
 
@@ -268,6 +280,33 @@
     peer.on('open', () => {
       const call = peer.call(babyId, myStream);
       let gotStream = false;
+
+      // Live diagnostics: ICE state, incoming bitrate, remote audio level, player state
+      const diag = $('#diag');
+      diag.classList.remove('hidden');
+      let lastBytes = 0;
+      setInterval(async () => {
+        const pc = call.peerConnection;
+        if (!pc){ diag.textContent = 'link: setting up…'; return; }
+        let bytes = 0, level = null;
+        try{
+          (await pc.getStats()).forEach(r => {
+            if (r.type === 'inbound-rtp' && (r.kind === 'audio' || r.mediaType === 'audio')){
+              bytes = r.bytesReceived || 0;
+              if (typeof r.audioLevel === 'number') level = r.audioLevel;
+            }
+          });
+        }catch(e){}
+        const rate = Math.max(0, bytes - lastBytes); lastBytes = bytes;
+        if (pc.iceConnectionState === 'failed')
+          setStatus(statusEl, 'warn', 'Media path failed — network blocks P2P');
+        diag.textContent =
+          'link: ' + pc.iceConnectionState +
+          '\naudio in: ' + (rate > 0 ? Math.round(rate*8/1000) + ' kbit/s' : 'NONE') +
+          (level !== null ? '\nremote level: ' + level.toFixed(3) : '') +
+          '\nplayer: ' + (remoteAudio.paused ? 'PAUSED' : 'playing') +
+          (remoteAudio.muted ? ' (MUTED)' : '') + ' · vol ' + remoteAudio.volume;
+      }, 1000);
 
       call.on('stream', babyStream => {
         gotStream = true;
