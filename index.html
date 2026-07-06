@@ -129,6 +129,23 @@
 import {joinRoom, getRelaySockets} from 'https://cdn.jsdelivr.net/npm/@trystero-p2p/mqtt@0.25.2/+esm';
 
 const APP_ID = 'nightlight-babyphone-v1';
+
+// ---- Optional TURN relay -------------------------------------------------
+// Needed only when the two phones cannot reach each other directly
+// (e.g. router isolation, strict mobile carriers). Get free credentials at
+// https://www.metered.ca/stun-turn (free tier), then uncomment and fill in:
+const TURN_CONFIG = [
+  // {
+  //   urls: [
+  //     'turn:global.relay.metered.ca:80',
+  //     'turn:global.relay.metered.ca:443',
+  //     'turns:global.relay.metered.ca:443?transport=tcp'
+  //   ],
+  //   username: 'PASTE_USERNAME_HERE',
+  //   credential: 'PASTE_CREDENTIAL_HERE'
+  // }
+];
+const ROOM_CONFIG = { appId: APP_ID, ...(TURN_CONFIG.length ? { turnConfig: TURN_CONFIG } : {}) };
 const $ = s => document.querySelector(s);
 const views = { start: $('#view-start'), baby: $('#view-baby'), parent: $('#view-parent') };
 const remoteAudio = $('#remote-audio');
@@ -251,7 +268,7 @@ async function startBaby(){
 
   const roomId = randomId();
   const statusEl = $('#baby-status');
-  const room = joinRoom({ appId: APP_ID }, roomId, {
+  const room = joinRoom(ROOM_CONFIG, roomId, {
     onJoinError: e => setStatus(statusEl, 'warn', 'Join error: ' + (e && e.error || e))
   });
   let listeners = 0;
@@ -292,7 +309,7 @@ async function startParent(roomId){
     await remoteAudio.play();
   }catch(e){}
 
-  const room = joinRoom({ appId: APP_ID }, roomId, {
+  const room = joinRoom(ROOM_CONFIG, roomId, {
     onJoinError: e => setStatus(statusEl, 'warn', 'Join error: ' + (e && e.error || e))
   });
   let gotStream = false;
