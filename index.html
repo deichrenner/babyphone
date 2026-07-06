@@ -121,12 +121,12 @@
   <div class="diag hidden" id="parent-diag"></div>
 </main>
 
-<footer>Peer-to-peer via WebRTC · serverless signaling (Trystero/Nostr) · no account, no recording</footer>
+<footer>Peer-to-peer via WebRTC · serverless signaling (Trystero/MQTT) · no account, no recording</footer>
 
 <audio id="remote-audio" autoplay playsinline></audio>
 
 <script type="module">
-import {joinRoom, getRelaySockets, selfId} from 'https://cdn.jsdelivr.net/npm/trystero@0.25.2/+esm';
+import {joinRoom, getRelaySockets} from 'https://cdn.jsdelivr.net/npm/@trystero-p2p/mqtt@0.25.2/+esm';
 
 const APP_ID = 'nightlight-babyphone-v1';
 const $ = s => document.querySelector(s);
@@ -185,7 +185,7 @@ function relaySummary(){
     const socks = getRelaySockets();
     const urls = Object.keys(socks);
     const open = urls.filter(u => socks[u] && socks[u].readyState === 1).length;
-    return 'signal relays: ' + open + '/' + urls.length + ' connected';
+    return 'signal brokers: ' + open + '/' + urls.length + ' connected';
   }catch(e){ return 'signal relays: ?'; }
 }
 
@@ -250,8 +250,10 @@ async function startBaby(){
   meter(stream);
 
   const roomId = randomId();
-  const room = joinRoom({ appId: APP_ID }, roomId);
   const statusEl = $('#baby-status');
+  const room = joinRoom({ appId: APP_ID }, roomId, {
+    onJoinError: e => setStatus(statusEl, 'warn', 'Join error: ' + (e && e.error || e))
+  });
   let listeners = 0;
 
   const url = location.origin + location.pathname + '?listen=' + roomId;
@@ -290,7 +292,9 @@ async function startParent(roomId){
     await remoteAudio.play();
   }catch(e){}
 
-  const room = joinRoom({ appId: APP_ID }, roomId);
+  const room = joinRoom({ appId: APP_ID }, roomId, {
+    onJoinError: e => setStatus(statusEl, 'warn', 'Join error: ' + (e && e.error || e))
+  });
   let gotStream = false;
 
   room.onPeerJoin = () => setStatus(statusEl, null, 'Found baby station — waiting for audio…');
