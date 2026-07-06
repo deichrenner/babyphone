@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="theme-color" content="#0c1120">
+<title>Nightlight — browser babyphone</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --night:#0c1120;
+    --night-2:#111a2e;
+    --ink:#ece7da;
+    --dim:#8b94a8;
+    --amber:#f2b65c;
+    --amber-soft:rgba(242,182,92,.14);
+    --ok:#7fc79b;
+    --warn:#e4746a;
+    --ring: 0;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+  html,body{height:100%}
+  body{
+    background:var(--night);
+    color:var(--ink);
+    font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;
+    display:flex;flex-direction:column;align-items:center;
+    padding:24px 20px calc(24px + env(safe-area-inset-bottom));
+    min-height:100dvh;
+  }
+  header{width:100%;max-width:420px;display:flex;align-items:baseline;justify-content:space-between;margin-bottom:8px}
+  .wordmark{font-family:"Fraunces",serif;font-weight:600;font-size:22px;letter-spacing:.01em}
+  .wordmark .dot{color:var(--amber)}
+  .role-tag{font-size:12px;color:var(--dim);text-transform:uppercase;letter-spacing:.14em}
+  main{width:100%;max-width:420px;flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:22px;text-align:center}
+  h1{font-family:"Fraunces",serif;font-weight:500;font-size:30px;line-height:1.2}
+  p.lede{color:var(--dim);max-width:32ch}
+  button{
+    font:inherit;color:var(--night);background:var(--amber);
+    border:0;border-radius:999px;padding:16px 30px;font-weight:600;font-size:17px;
+    cursor:pointer;touch-action:manipulation;
+  }
+  button:focus-visible{outline:3px solid var(--ink);outline-offset:3px}
+  button.ghost{background:transparent;color:var(--dim);border:1px solid #2a3550;font-weight:500;font-size:14px;padding:10px 18px}
+  button:disabled{opacity:.45}
+  .hidden{display:none !important}
+
+  /* The nightlight ring — live sound level */
+  .lamp{
+    position:relative;width:200px;height:200px;border-radius:50%;
+    display:flex;align-items:center;justify-content:center;
+    background:radial-gradient(circle at 50% 42%, #182338, var(--night-2));
+    border:1px solid #223055;
+  }
+  .lamp::before{
+    content:"";position:absolute;inset:-14px;border-radius:50%;
+    background:radial-gradient(circle, var(--amber-soft) 0%, transparent 70%);
+    transform:scale(calc(.9 + var(--ring)*1.1));
+    opacity:calc(.35 + var(--ring)*.65);
+    transition:transform .08s linear,opacity .08s linear;
+    pointer-events:none;
+  }
+  .lamp .glyph{font-size:56px;filter:saturate(.7)}
+  .lamp .level{
+    position:absolute;inset:6px;border-radius:50%;
+    border:2px solid var(--amber);
+    opacity:calc(var(--ring)*.9);
+    transform:scale(calc(.86 + var(--ring)*.14));
+    transition:transform .08s linear,opacity .08s linear;
+    pointer-events:none;
+  }
+  @media (prefers-reduced-motion: reduce){
+    .lamp::before,.lamp .level{transition:none}
+  }
+
+  .status{display:flex;align-items:center;gap:8px;font-size:14px;color:var(--dim)}
+  .status .pip{width:8px;height:8px;border-radius:50%;background:var(--dim)}
+  .status.ok .pip{background:var(--ok)}
+  .status.ok{color:var(--ok)}
+  .status.warn .pip{background:var(--warn)}
+  .status.warn{color:var(--warn)}
+
+  #qr-wrap{background:#fff;padding:14px;border-radius:16px;line-height:0}
+  #qr-wrap img,#qr-wrap canvas{display:block}
+  .hint{font-size:13px;color:var(--dim);max-width:34ch}
+  .hint b{color:var(--ink);font-weight:600}
+
+  #talk{
+    background:var(--night-2);color:var(--ink);border:1px solid #2a3550;
+    width:100%;padding:18px;border-radius:16px;font-size:16px;
+    user-select:none;-webkit-user-select:none;
+  }
+  #talk.live{background:var(--amber);color:var(--night);border-color:var(--amber)}
+
+  .banner{width:100%;max-width:420px;background:#2a1c1c;border:1px solid #5b3030;color:#f0c9c4;
+    border-radius:12px;padding:12px 14px;font-size:14px;text-align:left}
+  footer{width:100%;max-width:420px;margin-top:18px;font-size:12px;color:#5c6478;text-align:center}
+  a{color:var(--dim)}
+</style>
+</head>
+<body>
+<header>
+  <div class="wordmark">nightlight<span class="dot">.</span></div>
+  <div class="role-tag" id="role-tag">start</div>
+</header>
+
+<div class="banner hidden" id="https-warning">
+  This page is not served over <b>https</b>, so the browser will block the microphone
+  and the QR link won't reach the other phone. Host it (e.g. GitHub Pages) and open the https URL.
+</div>
+
+<main id="view-start">
+  <div class="lamp"><span class="glyph">🌙</span><span class="level"></span></div>
+  <h1>Two phones,<br>one sleeping baby</h1>
+  <p class="lede">This phone stays with the baby and streams sound. The other one scans a code and listens.</p>
+  <button id="btn-baby">Start baby station</button>
+  <p class="hint">Audio travels directly between the two phones (WebRTC). Nothing is recorded or stored.</p>
+</main>
+
+<main id="view-baby" class="hidden">
+  <div class="lamp"><span class="glyph">👶</span><span class="level"></span></div>
+  <h1 style="font-size:24px">Scan with the other phone</h1>
+  <div id="qr-wrap"></div>
+  <p class="hint">Open the camera app on the listening phone and point it here. Then keep <b>this</b> phone near the baby, plugged in, screen on.</p>
+  <div class="status" id="baby-status"><span class="pip"></span><span>Getting ready…</span></div>
+</main>
+
+<main id="view-parent" class="hidden">
+  <div class="lamp"><span class="glyph">🔊</span><span class="level"></span></div>
+  <h1 style="font-size:24px" id="parent-title">Listening station</h1>
+  <button id="btn-listen">Start listening</button>
+  <div class="status hidden" id="parent-status"><span class="pip"></span><span>Connecting…</span></div>
+  <button id="btn-unmute" class="hidden">🔇 Tap to enable sound</button>
+  <p class="hint hidden" id="parent-hint">Keep the screen on. The ring glows with every sound from the baby's room.</p>
+</main>
+
+<footer>Peer-to-peer via WebRTC · signaling by PeerJS cloud · no account, no recording</footer>
+
+<audio id="remote-audio" autoplay playsinline></audio>
+
+<script>
+(() => {
+  const $ = s => document.querySelector(s);
+  const views = { start: $('#view-start'), baby: $('#view-baby'), parent: $('#view-parent') };
+  const roleTag = $('#role-tag');
+  const remoteAudio = $('#remote-audio');
+
+  function show(name){
+    Object.values(views).forEach(v => v.classList.add('hidden'));
+    views[name].classList.remove('hidden');
+    roleTag.textContent = {start:'start', baby:'baby station', parent:'listening'}[name];
+  }
+  function setStatus(el, cls, text){
+    el.classList.remove('hidden','ok','warn');
+    if(cls) el.classList.add(cls);
+    el.querySelector('span:last-child').textContent = text;
+  }
+
+  // ---- secure-context check --------------------------------------------
+  if (location.protocol !== 'https:' && !['localhost','127.0.0.1'].includes(location.hostname)) {
+    $('#https-warning').classList.remove('hidden');
+  }
+
+  // ---- keep the screen awake -------------------------------------------
+  let wakeLock = null;
+  async function keepAwake(){
+    try { wakeLock = await navigator.wakeLock?.request('screen'); } catch(e){}
+  }
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && wakeLock !== null) keepAwake();
+  });
+
+  // ---- sound level -> CSS ring ------------------------------------------
+  let audioCtx;
+  function meter(stream){
+    try{
+      audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+      const src = audioCtx.createMediaStreamSource(stream);
+      const an = audioCtx.createAnalyser();
+      an.fftSize = 512;
+      src.connect(an);
+      const buf = new Uint8Array(an.frequencyBinCount);
+      (function loop(){
+        an.getByteTimeDomainData(buf);
+        let sum = 0;
+        for (let i=0;i<buf.length;i++){ const d = (buf[i]-128)/128; sum += d*d; }
+        const rms = Math.sqrt(sum/buf.length);
+        const lvl = Math.min(1, rms*6);
+        document.documentElement.style.setProperty('--ring', lvl.toFixed(3));
+        requestAnimationFrame(loop);
+      })();
+    }catch(e){}
+  }
+
+  function newPeer(id){
+    return new Peer(id, { debug: 1 }); // PeerJS public cloud for signaling + STUN
+  }
+  const randomId = () => 'nl-' + Math.random().toString(36).slice(2,8) + Math.random().toString(36).slice(2,6);
+
+  // =======================================================================
+  // BABY STATION
+  // =======================================================================
+  async function startBaby(){
+    let stream;
+    try{
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: false, autoGainControl: true },
+        video: false
+      });
+    }catch(e){
+      alert('Microphone access is required for the baby station. (' + e.name + ')');
+      return;
+    }
+    show('baby');
+    keepAwake();
+    meter(stream);
+
+    const id = randomId();
+    const peer = newPeer(id);
+    const statusEl = $('#baby-status');
+    let listeners = 0;
+
+    peer.on('open', () => {
+      const url = location.origin + location.pathname + '?listen=' + id;
+      new QRCode($('#qr-wrap'), { text: url, width: 220, height: 220, correctLevel: QRCode.CorrectLevel.M });
+      setStatus(statusEl, null, 'Waiting for a listener…');
+    });
+
+    peer.on('call', call => {
+      call.answer(stream);                       // send baby audio
+      const done = () => { listeners = Math.max(0, listeners-1); update(); };
+      call.on('close', done); call.on('error', done);
+      listeners++; update();
+      function update(){
+        if (listeners > 0) setStatus(statusEl, 'ok', listeners === 1 ? 'A listener is connected' : listeners + ' listeners connected');
+        else setStatus(statusEl, null, 'Listener left — waiting…');
+      }
+    });
+
+    peer.on('disconnected', () => { setStatus(statusEl,'warn','Signal lost — reconnecting…'); peer.reconnect(); });
+    peer.on('error', err => setStatus(statusEl,'warn','Error: ' + err.type));
+  }
+
+  // =======================================================================
+  // LISTENING STATION
+  // =======================================================================
+  async function startParent(babyId){
+    const statusEl = $('#parent-status');
+    $('#btn-listen').disabled = true;
+    setStatus(statusEl, null, 'Connecting…');
+    keepAwake();
+
+    // Unlock audio output while we're still inside the user's tap gesture:
+    // start the element playing a silent stream now, swap in the real one later.
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    try{ await audioCtx.resume(); }catch(e){}
+    const dst = audioCtx.createMediaStreamDestination();
+    const myStream = dst.stream;                 // silent; also sent as our side of the call
+    remoteAudio.muted = false;
+    remoteAudio.volume = 1;
+    remoteAudio.srcObject = myStream;
+    try{ await remoteAudio.play(); }catch(e){}
+
+    const peer = newPeer();
+    peer.on('open', () => {
+      const call = peer.call(babyId, myStream);
+      let gotStream = false;
+
+      call.on('stream', babyStream => {
+        gotStream = true;
+        remoteAudio.srcObject = babyStream;
+        remoteAudio.play().catch(() => $('#btn-unmute').classList.remove('hidden'));
+        meter(babyStream);
+        setStatus(statusEl, 'ok', 'Connected — you are live');
+        $('#btn-listen').classList.add('hidden');
+        $('#parent-hint').classList.remove('hidden');
+        $('#parent-title').textContent = 'Listening…';
+      });
+      call.on('close', () => setStatus(statusEl, 'warn', 'Connection closed — reload to reconnect'));
+      call.on('error', e => setStatus(statusEl, 'warn', 'Connection error — reload to retry'));
+      setTimeout(() => { if(!gotStream) setStatus(statusEl,'warn','No answer. Is the baby station page still open?'); }, 12000);
+    });
+    peer.on('disconnected', () => peer.reconnect());
+    peer.on('error', err => {
+      setStatus(statusEl, 'warn', err.type === 'peer-unavailable'
+        ? 'Baby station not found — rescan the QR code'
+        : 'Error: ' + err.type);
+      $('#btn-listen').disabled = false;
+    });
+
+    // Fallback if the browser still blocked remote-audio playback.
+    $('#btn-unmute').addEventListener('click', () => {
+      remoteAudio.muted = false;
+      audioCtx && audioCtx.resume();
+      remoteAudio.play().then(() => $('#btn-unmute').classList.add('hidden')).catch(()=>{});
+    });
+  }
+
+  // ---- routing -----------------------------------------------------------
+  const babyId = new URLSearchParams(location.search).get('listen');
+  if (babyId){
+    show('parent');
+    $('#btn-listen').addEventListener('click', () => startParent(babyId));
+  } else {
+    show('start');
+    $('#btn-baby').addEventListener('click', startBaby);
+  }
+})();
+</script>
+</body>
+</html>
