@@ -300,6 +300,14 @@ async function startParent(roomId){
   setStatus(statusEl, null, 'Connecting…');
   keepAwake();
 
+  // Request mic permission briefly: with permission granted, the browser
+  // exposes real local IPs in ICE candidates instead of mDNS .local names,
+  // which is often required on home Wi-Fi where multicast is blocked.
+  try{
+    const tmp = await navigator.mediaDevices.getUserMedia({ audio: true });
+    tmp.getTracks().forEach(t => t.stop());
+  }catch(e){}
+
   // Unlock audio output while still inside the tap gesture.
   try{ await ctx().resume(); }catch(e){}
   try{
