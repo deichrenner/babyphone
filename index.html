@@ -11,21 +11,14 @@
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&display=swap" rel="stylesheet">
 <style>
   :root{
-    --night:#0c1120;
-    --night-2:#111a2e;
-    --ink:#ece7da;
-    --dim:#8b94a8;
-    --amber:#f2b65c;
-    --amber-soft:rgba(242,182,92,.14);
-    --ok:#7fc79b;
-    --warn:#e4746a;
-    --ring: 0;
+    --night:#0c1120; --night-2:#111a2e; --ink:#ece7da; --dim:#8b94a8;
+    --amber:#f2b65c; --amber-soft:rgba(242,182,92,.14);
+    --ok:#7fc79b; --warn:#e4746a; --ring: 0;
   }
   *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
   html,body{height:100%}
   body{
-    background:var(--night);
-    color:var(--ink);
+    background:var(--night); color:var(--ink);
     font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;
     display:flex;flex-direction:column;align-items:center;
     padding:24px 20px calc(24px + env(safe-area-inset-bottom));
@@ -44,11 +37,9 @@
     cursor:pointer;touch-action:manipulation;
   }
   button:focus-visible{outline:3px solid var(--ink);outline-offset:3px}
-  button.ghost{background:transparent;color:var(--dim);border:1px solid #2a3550;font-weight:500;font-size:14px;padding:10px 18px}
   button:disabled{opacity:.45}
   .hidden{display:none !important}
 
-  /* The nightlight ring — live sound level */
   .lamp{
     position:relative;width:200px;height:200px;border-radius:50%;
     display:flex;align-items:center;justify-content:center;
@@ -72,9 +63,7 @@
     transition:transform .08s linear,opacity .08s linear;
     pointer-events:none;
   }
-  @media (prefers-reduced-motion: reduce){
-    .lamp::before,.lamp .level{transition:none}
-  }
+  @media (prefers-reduced-motion: reduce){ .lamp::before,.lamp .level{transition:none} }
 
   .status{display:flex;align-items:center;gap:8px;font-size:14px;color:var(--dim)}
   .status .pip{width:8px;height:8px;border-radius:50%;background:var(--dim)}
@@ -88,19 +77,11 @@
   .hint{font-size:13px;color:var(--dim);max-width:34ch}
   .hint b{color:var(--ink);font-weight:600}
 
-  #talk{
-    background:var(--night-2);color:var(--ink);border:1px solid #2a3550;
-    width:100%;padding:18px;border-radius:16px;font-size:16px;
-    user-select:none;-webkit-user-select:none;
-  }
-  #talk.live{background:var(--amber);color:var(--night);border-color:var(--amber)}
-
   .banner{width:100%;max-width:420px;background:#2a1c1c;border:1px solid #5b3030;color:#f0c9c4;
     border-radius:12px;padding:12px 14px;font-size:14px;text-align:left}
-  #diag{font:11px/1.7 ui-monospace,Menlo,Consolas,monospace;color:#7d879c;background:var(--night-2);
+  .diag{font:11px/1.7 ui-monospace,Menlo,Consolas,monospace;color:#7d879c;background:var(--night-2);
     border:1px solid #223055;border-radius:10px;padding:8px 12px;width:100%;text-align:left;white-space:pre-wrap}
   footer{width:100%;max-width:420px;margin-top:18px;font-size:12px;color:#5c6478;text-align:center}
-  a{color:var(--dim)}
 </style>
 </head>
 <body>
@@ -128,6 +109,7 @@
   <div id="qr-wrap"></div>
   <p class="hint">Open the camera app on the listening phone and point it here. Then keep <b>this</b> phone near the baby, plugged in, screen on.</p>
   <div class="status" id="baby-status"><span class="pip"></span><span>Getting ready…</span></div>
+  <div class="diag hidden" id="baby-diag"></div>
 </main>
 
 <main id="view-parent" class="hidden">
@@ -137,7 +119,7 @@
   <div class="status hidden" id="parent-status"><span class="pip"></span><span>Connecting…</span></div>
   <button id="btn-unmute" class="hidden">🔇 Tap to enable sound</button>
   <p class="hint hidden" id="parent-hint">Keep the screen on. The ring glows with every sound from the baby's room.</p>
-  <div id="diag" class="hidden"></div>
+  <div class="diag hidden" id="parent-diag"></div>
 </main>
 
 <footer>Peer-to-peer via WebRTC · signaling by PeerJS cloud · no account, no recording</footer>
@@ -148,13 +130,12 @@
 (() => {
   const $ = s => document.querySelector(s);
   const views = { start: $('#view-start'), baby: $('#view-baby'), parent: $('#view-parent') };
-  const roleTag = $('#role-tag');
   const remoteAudio = $('#remote-audio');
 
   function show(name){
     Object.values(views).forEach(v => v.classList.add('hidden'));
     views[name].classList.remove('hidden');
-    roleTag.textContent = {start:'start', baby:'baby station', parent:'listening'}[name];
+    $('#role-tag').textContent = {start:'start', baby:'baby station', parent:'listening'}[name];
   }
   function setStatus(el, cls, text){
     el.classList.remove('hidden','ok','warn');
@@ -162,7 +143,6 @@
     el.querySelector('span:last-child').textContent = text;
   }
 
-  // ---- secure-context check --------------------------------------------
   if (location.protocol !== 'https:' && !['localhost','127.0.0.1'].includes(location.hostname)) {
     $('#https-warning').classList.remove('hidden');
   }
@@ -178,11 +158,11 @@
 
   // ---- sound level -> CSS ring ------------------------------------------
   let audioCtx;
+  function ctx(){ return audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)(); }
   function meter(stream){
     try{
-      audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
-      const src = audioCtx.createMediaStreamSource(stream);
-      const an = audioCtx.createAnalyser();
+      const src = ctx().createMediaStreamSource(stream);
+      const an = ctx().createAnalyser();
       an.fftSize = 512;
       src.connect(an);
       const buf = new Uint8Array(an.frequencyBinCount);
@@ -190,9 +170,8 @@
         an.getByteTimeDomainData(buf);
         let sum = 0;
         for (let i=0;i<buf.length;i++){ const d = (buf[i]-128)/128; sum += d*d; }
-        const rms = Math.sqrt(sum/buf.length);
-        const lvl = Math.min(1, rms*6);
-        document.documentElement.style.setProperty('--ring', lvl.toFixed(3));
+        document.documentElement.style.setProperty('--ring',
+          Math.min(1, Math.sqrt(sum/buf.length)*6).toFixed(3));
         requestAnimationFrame(loop);
       })();
     }catch(e){}
@@ -200,26 +179,62 @@
 
   function newPeer(id){
     return new Peer(id, {
-      debug: 1, // PeerJS public cloud for signaling
+      debug: 2,
       config: { iceServers: [
-        { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] },
-        // Free public TURN relay (Open Relay Project) — fallback when direct P2P is blocked
-        { urls: 'turn:openrelay.metered.ca:80',  username: 'openrelayproject', credential: 'openrelayproject' },
-        { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
-        { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' }
+        { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }
       ]}
     });
   }
   const randomId = () => 'nl-' + Math.random().toString(36).slice(2,8) + Math.random().toString(36).slice(2,6);
 
+  // ---- shared: RTCPeerConnection diagnostics ----------------------------
+  function watchPC(getPC, el, dir /* 'in' | 'out' */){
+    el.classList.remove('hidden');
+    let lastBytes = 0;
+    setInterval(async () => {
+      const pc = getPC();
+      if (!pc){ el.textContent = 'link: waiting for call…'; return; }
+      let bytes = 0, level = null, pair = '';
+      try{
+        const stats = await pc.getStats();
+        stats.forEach(r => {
+          const kind = r.kind || r.mediaType;
+          if (dir === 'in'  && r.type === 'inbound-rtp'  && kind === 'audio'){
+            bytes = r.bytesReceived || 0;
+            if (typeof r.audioLevel === 'number') level = r.audioLevel;
+          }
+          if (dir === 'out' && r.type === 'outbound-rtp' && kind === 'audio'){
+            bytes = r.bytesSent || 0;
+          }
+          if (r.type === 'candidate-pair' && (r.selected || r.nominated) && r.state === 'succeeded'){
+            let l = stats.get(r.localCandidateId), rm = stats.get(r.remoteCandidateId);
+            if (l && rm) pair = l.candidateType + '→' + rm.candidateType;
+          }
+        });
+      }catch(e){}
+      const rate = Math.max(0, bytes - lastBytes); lastBytes = bytes;
+      el.textContent =
+        'link: ' + (pc.connectionState || '?') + ' · ice: ' + pc.iceConnectionState +
+        ' · gather: ' + pc.iceGatheringState +
+        '\nsignaling: ' + pc.signalingState + (pair ? ' · path: ' + pair : '') +
+        '\naudio ' + dir + ': ' + (rate > 0 ? Math.round(rate*8/1000) + ' kbit/s' : 'NONE') +
+        (level !== null ? ' · level: ' + level.toFixed(3) : '') +
+        (dir === 'in'
+          ? '\nplayer: ' + (remoteAudio.paused ? 'PAUSED' : 'playing') +
+            (remoteAudio.muted ? ' (MUTED)' : '') + ' · vol ' + remoteAudio.volume
+          : '');
+    }, 1000);
+  }
+
   // =======================================================================
-  // BABY STATION
+  // BABY STATION — waits for a data connection, then CALLS the listener
+  // with its microphone stream. (Baby initiates media = no fake streams.)
   // =======================================================================
   async function startBaby(){
     let stream;
     try{
       stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: false, autoGainControl: true },
+        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: true },
         video: false
       });
     }catch(e){
@@ -233,7 +248,10 @@
     const id = randomId();
     const peer = newPeer(id);
     const statusEl = $('#baby-status');
+    let currentCall = null;
     let listeners = 0;
+
+    watchPC(() => currentCall && currentCall.peerConnection, $('#baby-diag'), 'out');
 
     peer.on('open', () => {
       const url = location.origin + location.pathname + '?listen=' + id;
@@ -241,11 +259,17 @@
       setStatus(statusEl, null, 'Waiting for a listener…');
     });
 
-    peer.on('call', call => {
-      call.answer(stream);                       // send baby audio
-      const done = () => { listeners = Math.max(0, listeners-1); update(); };
-      call.on('close', done); call.on('error', done);
-      listeners++; update();
+    // Listener announces itself over a data connection; we call back with audio.
+    peer.on('connection', conn => {
+      conn.on('open', () => {
+        const call = peer.call(conn.peer, stream);
+        currentCall = call;
+        listeners++; update();
+        const done = () => { listeners = Math.max(0, listeners-1); update(); };
+        conn.on('close', done);
+        call.on('close', done);
+        call.on('error', done);
+      });
       function update(){
         if (listeners > 0) setStatus(statusEl, 'ok', listeners === 1 ? 'A listener is connected' : listeners + ' listeners connected');
         else setStatus(statusEl, null, 'Listener left — waiting…');
@@ -257,7 +281,7 @@
   }
 
   // =======================================================================
-  // LISTENING STATION
+  // LISTENING STATION — receive-only
   // =======================================================================
   async function startParent(babyId){
     const statusEl = $('#parent-status');
@@ -265,63 +289,47 @@
     setStatus(statusEl, null, 'Connecting…');
     keepAwake();
 
-    // Unlock audio output while we're still inside the user's tap gesture:
-    // start the element playing a silent stream now, swap in the real one later.
-    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
-    try{ await audioCtx.resume(); }catch(e){}
-    const dst = audioCtx.createMediaStreamDestination();
-    const myStream = dst.stream;                 // silent; also sent as our side of the call
-    remoteAudio.muted = false;
-    remoteAudio.volume = 1;
-    remoteAudio.srcObject = myStream;
-    try{ await remoteAudio.play(); }catch(e){}
+    // Unlock audio output while still inside the tap gesture:
+    // start the element on a silent local stream; swap in the real one later.
+    try{ await ctx().resume(); }catch(e){}
+    try{
+      remoteAudio.muted = false;
+      remoteAudio.volume = 1;
+      remoteAudio.srcObject = ctx().createMediaStreamDestination().stream;
+      await remoteAudio.play();
+    }catch(e){}
+
+    let currentCall = null;
+    watchPC(() => currentCall && currentCall.peerConnection, $('#parent-diag'), 'in');
 
     const peer = newPeer();
+    let gotStream = false;
+
     peer.on('open', () => {
-      const call = peer.call(babyId, myStream);
-      let gotStream = false;
+      // Announce ourselves; the baby station will call us with its audio.
+      const conn = peer.connect(babyId, { reliable: true });
+      conn.on('open', () => setStatus(statusEl, null, 'Found baby station — waiting for audio…'));
+      conn.on('error', () => setStatus(statusEl, 'warn', 'Could not reach baby station — rescan the QR code'));
+      setTimeout(() => { if(!gotStream) setStatus(statusEl,'warn','No audio after 15s — check the diagnostics below'); }, 15000);
+    });
 
-      // Live diagnostics: ICE state, incoming bitrate, remote audio level, player state
-      const diag = $('#diag');
-      diag.classList.remove('hidden');
-      let lastBytes = 0;
-      setInterval(async () => {
-        const pc = call.peerConnection;
-        if (!pc){ diag.textContent = 'link: setting up…'; return; }
-        let bytes = 0, level = null;
-        try{
-          (await pc.getStats()).forEach(r => {
-            if (r.type === 'inbound-rtp' && (r.kind === 'audio' || r.mediaType === 'audio')){
-              bytes = r.bytesReceived || 0;
-              if (typeof r.audioLevel === 'number') level = r.audioLevel;
-            }
-          });
-        }catch(e){}
-        const rate = Math.max(0, bytes - lastBytes); lastBytes = bytes;
-        if (pc.iceConnectionState === 'failed')
-          setStatus(statusEl, 'warn', 'Media path failed — network blocks P2P');
-        diag.textContent =
-          'link: ' + pc.iceConnectionState +
-          '\naudio in: ' + (rate > 0 ? Math.round(rate*8/1000) + ' kbit/s' : 'NONE') +
-          (level !== null ? '\nremote level: ' + level.toFixed(3) : '') +
-          '\nplayer: ' + (remoteAudio.paused ? 'PAUSED' : 'playing') +
-          (remoteAudio.muted ? ' (MUTED)' : '') + ' · vol ' + remoteAudio.volume;
-      }, 1000);
-
+    peer.on('call', call => {
+      currentCall = call;
+      call.answer();               // receive-only: we send nothing
       call.on('stream', babyStream => {
         gotStream = true;
         remoteAudio.srcObject = babyStream;
         remoteAudio.play().catch(() => $('#btn-unmute').classList.remove('hidden'));
         meter(babyStream);
-        setStatus(statusEl, 'ok', 'Connected — you are live');
+        setStatus(statusEl, 'ok', 'Receiving audio');
         $('#btn-listen').classList.add('hidden');
         $('#parent-hint').classList.remove('hidden');
         $('#parent-title').textContent = 'Listening…';
       });
       call.on('close', () => setStatus(statusEl, 'warn', 'Connection closed — reload to reconnect'));
-      call.on('error', e => setStatus(statusEl, 'warn', 'Connection error — reload to retry'));
-      setTimeout(() => { if(!gotStream) setStatus(statusEl,'warn','No answer. Is the baby station page still open?'); }, 12000);
+      call.on('error', () => setStatus(statusEl, 'warn', 'Connection error — reload to retry'));
     });
+
     peer.on('disconnected', () => peer.reconnect());
     peer.on('error', err => {
       setStatus(statusEl, 'warn', err.type === 'peer-unavailable'
@@ -330,10 +338,9 @@
       $('#btn-listen').disabled = false;
     });
 
-    // Fallback if the browser still blocked remote-audio playback.
     $('#btn-unmute').addEventListener('click', () => {
       remoteAudio.muted = false;
-      audioCtx && audioCtx.resume();
+      ctx().resume();
       remoteAudio.play().then(() => $('#btn-unmute').classList.add('hidden')).catch(()=>{});
     });
   }
